@@ -1,0 +1,17 @@
+# 备份 / 临时文件，不入库
+*.bak
+*.bak-*
+*.bak[0-9]*
+*~
+*.tmp
+*.orig
+*.rej
+
+# Python
+__pycache__/
+*.pyc
+
+# 系统
+Thumbs.db
+desktop.ini
+.DS_Store
