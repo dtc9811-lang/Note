@@ -5,7 +5,8 @@
 用法（在 F:/novel/百世飞升续写 下运行）：
     python 脚本/文风体检.py                # 体检全部章（只报有问题的）
     python 脚本/文风体检.py 37             # 只体检第37章
-    python 脚本/文风体检.py 全              # 全部章 + 跨章重复汇总
+    python 脚本/文风体检.py 全              # 全部章 + 跨章重复汇总 + 读感统计
+    python 脚本/文风体检.py 读感            # 只出读感统计（章长/场数/对话/底线词密度）
     python 脚本/文风体检.py <文件路径>       # 体检任意一个稿件（草稿、重写稿都行）
 
 判定分两档：
@@ -64,6 +65,21 @@ FILLER = ['看了一眼', '没有说话', '停了一下', '顿了顿', '沉默',
 # 章末抒情/总结的迹象
 SUMMARIZE = ['原来', '其实', '终究', '也许', '这一切', '某种意义', '他明白了',
              '他终于', '从此', '就这样', '说到底', '本质上']
+
+# ---------------------------------------------------------------- 读感统计（2026-09 新增）
+# 硬指标全绿不等于好读。下列是 27 号文实测出问题的那些：
+#   章长分布 / 场数与对话段 / 世界专名密度 / 底线词密度
+# “大世界”只算原著专名＋已登记的上层地名（不算“路网/渡口”这类本地气泡词）
+BIGWORLD = ['天柱界', '大椿界', '净光界', '离辰界', '红海界', '沧海界',
+            '太乙灵界', '太素灵界', '太乙关', '太乙', '太素', '先天神州',
+            '鸿荒', '无回天', '虚界九天', '诸天', '大道长河', '灵界',
+            '客安城', '四会渡', '坊市城']
+CULT_WORDS = ['修炼', '闭关', '仙炁', '醒成', '洞天', '神识', '法力', '经脉',
+              '本源', '丹田', '炼']
+FIGHT_WORDS = ['出手', '动手', '劈', '斩', '挡', '撞', '围攻', '硬扛', '夺',
+               '抡', '踢', '掀', '压住', '接住', '跌', '血']
+SEG = 10          # 每 10 章汇总一段
+SHORT_CH = 1100   # 低于此字数进入“过短”清单（新章下限 1200；老章只报不判）
 
 # ---------------------------------------------------------------- 跨章重复
 # 这些是机器原先抓不到的"作者口头禅/模板"。qs 写 15 章后最常堆这类。
@@ -277,6 +293,70 @@ def cross_chapter_report(allch):
           '口头禅（“看了很久”“笑了一声”）反复出现是模型写疲了。靠人判断。')
 
 
+def density_report(allch):
+    """读感统计：章长分布、场数与对话段、世界专名与底线词密度。只报不判。"""
+    rows = []
+    for fn, title, body in allch:
+        n = cjk(body) or 1
+        rows.append({
+            'no': int(re.match(r'^第0*(\d+)章', fn).group(1)),
+            'n': cjk(body),
+            'scenes': body.count('——'),
+            'dlog': body.count('“') // 2,
+            'bw': sum(body.count(w) for w in BIGWORLD) / n * 1000,
+            'cu': sum(body.count(w) for w in CULT_WORDS) / n * 1000,
+            'fi': sum(body.count(w) for w in FIGHT_WORDS) / n * 1000,
+        })
+    rows.sort(key=lambda r: r['no'])
+
+    def med(xs):
+        ys = sorted(xs)
+        return ys[len(ys) // 2] if ys else 0
+
+    print('-' * 72)
+    print('读感统计（只报不判；对应 27_全书总览与优化方案.md）')
+    print('%-10s %5s %7s %7s %7s %8s %8s' % ('段', '章数', '总字', '均字', '中位', '场(中位)', '对话(中位)'))
+    i = 0
+    while i < len(rows):
+        grp = rows[i:i + SEG]
+        i += SEG
+        ss = [g['n'] for g in grp]
+        print('%-10s %5d %7d %7d %7d %8.0f %8.0f'
+              % ('%d—%d' % (grp[0]['no'], grp[-1]['no']), len(grp), sum(ss),
+                 sum(ss) / len(ss), med(ss),
+                 med([g['scenes'] for g in grp]), med([g['dlog'] for g in grp])))
+    print('全体     %5d %7d %7d %7d'
+          % (len(rows), sum(g['n'] for g in rows),
+             sum(g['n'] for g in rows) / len(rows), med([g['n'] for g in rows])))
+
+    print('-' * 72)
+    print('底线词密度（每千字；“大世界”只算原著专名＋已登记的上层地名）')
+    print('%-10s %9s %9s %9s' % ('段', '大世界', '修炼', '战斗'))
+    i = 0
+    while i < len(rows):
+        grp = rows[i:i + SEG]
+        i += SEG
+        tot = sum(g['n'] for g in grp) or 1
+        print('%-10s %9.2f %9.2f %9.2f'
+              % ('%d—%d' % (grp[0]['no'], grp[-1]['no']),
+                 sum(g['bw'] * g['n'] for g in grp) / tot,
+                 sum(g['cu'] * g['n'] for g in grp) / tot,
+                 sum(g['fi'] * g['n'] for g in grp) / tot))
+
+    short = [g for g in rows if g['n'] < SHORT_CH]
+    print('-' * 72)
+    if short:
+        print('过短章（<%d 字，共 %d 章，占 %.0f%%）：'
+              % (SHORT_CH, len(short), len(short) * 100.0 / len(rows)))
+        print('  ' + '、'.join('%d(%d)' % (g['no'], g['n']) for g in short))
+    else:
+        print('[OK] 无过短章。')
+    thin = [g for g in rows if g['scenes'] < 2]
+    if thin:
+        print('单场章（无"——"分隔，共 %d 章）：%s'
+              % (len(thin), '、'.join(str(g['no']) for g in thin)))
+
+
 def main():
     args = sys.argv[1:]
     if args and os.path.exists(args[0]):
@@ -286,7 +366,8 @@ def main():
 
     allch = load_all()
     want_cross = bool(args and args[0] == '全')
-    if args and args[0] != '全':
+    want_feel = bool(args and args[0] == '读感')
+    if args and args[0] not in ('全', '读感'):
         key = args[0]
         if key.isdigit():
             allch = [c for c in allch if re.match(r'^第0*%d章_' % int(key), c[0])]
@@ -295,19 +376,24 @@ def main():
 
     bad = 0
     sus = 0
-    for fn, title, body in allch:
-        problems, suspects = check('第%s章 %s' % (fn.split('章')[0].replace('第', '').lstrip('0') or '?', title), body)
-        if problems:
-            bad += 1
-        elif suspects:
-            sus += 1
+    if not want_feel:
+        for fn, title, body in allch:
+            problems, suspects = check(
+                '第%s章 %s' % (fn.split('章')[0].replace('第', '').lstrip('0') or '?', title), body)
+            if problems:
+                bad += 1
+            elif suspects:
+                sus += 1
     total_n = sum(cjk(b) for _, _, b in allch)
-    print('-' * 60)
-    print('体检 %d 章，%d 正文字；有硬伤 %d 章，有可疑 %d 章'
-          % (len(allch), total_n, bad, sus))
-    print('提示：[硬伤] 必改；[可疑] 只供参考，套话/术语替代命中老章属正常。')
+    if not want_feel:
+        print('-' * 60)
+        print('体检 %d 章，%d 正文字；有硬伤 %d 章，有可疑 %d 章'
+              % (len(allch), total_n, bad, sus))
+        print('提示：[硬伤] 必改；[可疑] 只供参考，套话/术语替代命中老章属正常。')
     if want_cross:
         cross_chapter_report(allch)
+    if want_feel or want_cross:
+        density_report(allch)
 
 
 if __name__ == '__main__':
