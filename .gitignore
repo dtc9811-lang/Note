@@ -6,6 +6,8 @@
 *.tmp
 *.orig
 *.rej
+_backup_*.zip
+_backup*.zip
 
 # Python
 __pycache__/
