@@ -8,6 +8,31 @@
 
 ---
 
+## 〇、开工前：先接 DevTrace（本机统一工程记录系统）
+
+DevTrace 已配为 MCP 服务器 `devtrace`（全局配置 `~/.config/mcp/mcp.json`，HTTP，非 stdio）。
+工具：`resolve_workspace`、`search_tasks`、`get_task_context`、`create_task`、`update_task`、`record_progress`。
+
+**开工第一步，不用问人：**
+
+1. `resolve_workspace(cwd)` —— cwd 传**当前工程的真实工作目录**
+2. `matched=true` → 选最相关的 active Task → `get_task_context(task_id)` → 再动手
+3. 找不到明确 Task → `search_tasks`；**确认确实没有**才 `create_task`
+4. 完成有意义的修改／测试／失败实验／发现／决策／风险 → `record_progress`
+
+**任务状态要跟着维护**：阶段完成后同步 `status` / `next_step` / `current_conclusion` / `current_risk`。
+`next_step` 当前可执行时**直接执行**，不要只复述给用户。
+
+**收尾口径**：
+
+- 目标完全完成 → `status="done"`、`next_step=""`
+- 仍需实机验证／用户提供数据／外部条件／硬件测试 → 用 `verify` 或 `blocked`，并写清 `next_step`
+
+**字段**：`agent` 填实际模型名（如 `deepseek-v4-flash`），`source` 固定 `pi`，
+`display_summary` 写成人能在 Web 页面一眼扫读的一句话。
+
+---
+
 ## 一、最重要的一件事：谁是真源
 
 ```
