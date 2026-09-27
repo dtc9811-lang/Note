@@ -5,8 +5,10 @@
 用法（在 F:/novel/百世飞升续写 下运行）：
     python 脚本/文风体检.py                # 体检全部章（只报有问题的）
     python 脚本/文风体检.py 37             # 只体检第37章
-    python 脚本/文风体检.py 全              # 全部章 + 跨章重复汇总 + 读感统计
+    python 脚本/文风体检.py 全              # 全部章 + 跨章重复 + 读感统计 + 结构指标
     python 脚本/文风体检.py 读感            # 只出读感统计（章长/场数/对话/底线词密度）
+    python 脚本/文风体检.py 合并            # 只出结构指标 + 逐章明细表（供「合并减字」用）
+    python 脚本/文风体检.py 结构            # 只出结构指标汇总（不列明细）
     python 脚本/文风体检.py <文件路径>       # 体检任意一个稿件（草稿、重写稿都行）
 
 判定分两档：
@@ -18,6 +20,10 @@
     单章出现 ≥ TIC_CH_ALERT 次，或全书中 ≥ TIC_CHAPTERS_ALERT 章都出现，报警。
   * 自造人名 —— 台词里"XX说/问"的 XX，若不在《06 固定术语表》《09 人物速查卡》
     的登记表里，提示为疑似自造人名（07 G 节：没登记的名字一律不具名）。
+  * 结构指标（2026-09 新增，为「合并减字」服务）—— 镜头数 / 镜头均长 /
+    章末类型 / 模板句密度。拉稀的根因不是句子而是镜头碎片化：
+    实测 630 镜头、均 334 字、62% 不足 300 字；36 章一拍一章；
+    51/119 章末落在「看/望/站/走/合上账册」。方案见 规划/合并减字方案.md。
 
 阈值来源：07_禁区与自检清单.md C 节、文风样本 05、固定术语表 06。
 """
@@ -92,6 +98,37 @@ TIC_PHRASES = [
 TIC_CH_ALERT = 4           # 单章出现 >=4 次 → 该章报警
 TIC_CHAPTERS_ALERT = 6     # 全书 >=6 章都出现 → 汇总时报警（这类大多是有意复现的意象，靠人判断）
 
+# ---------------------------------------------------------------- 结构指标（为「合并减字」服务）
+# 实测口径（1—119 章）：211794 字 / 119 章 = 均 1779；镜头 630 个、均 334 字、中位 227；
+# 34% 镜头 <150 字，62% <300 字；36 章无「——」分隔（一拍一章）；章末模板收尾 51/119。
+# 结论：问题不在句子，在结构。合并目标 = 每章 3—5 镜、每镜 ≥450 字、章长 2600—2900。
+SCENE_SEP_RE = re.compile(r'^[ \t]*——[ \t]*$', re.M)   # 独占一行的「——」才是镜头分隔
+SCENE_TARGET_MIN = 450     # 合并口径：每镜目标 >=450 字
+SCENE_FRAG = 300           # 低于此长度算碎片镜头
+TEMPLATE_DENSITY_ALERT = 3.0   # 模板句密度上限（次/千字）
+CH_MERGE_BAND = (2600, 2900)   # 合并后均章目标带（写作单章用 2500—3500）
+
+# 模板句（非对话归属词）——这些是「写疲了」的口头禅，不是有意复现的意象
+TEMPLATE_PHRASES = [
+    '他在心里那本账上', '又添了一条', '赵升看着他', '皱了皱眉',
+    '没有再问', '没有说话', '火苗很稳', '井底是黑的',
+    '然后他开口了', '赵升没有笑', '看了很久', '笑了一声',
+    '点了点头', '停了一下', '写下来', '看了他一眼', '停了一息',
+]
+# 对话归属词（对话体单一化指标，单独统计，不计入模板密度）
+ATTR_PHRASES = [
+    '赵升说', '赵素说', '赵九满说', '赵长庚说', '赵茂说', '赵敕说',
+    '卫老修士说', '苗七说', '步纲君说', '窦让说', '谢青说', '祁广说',
+]
+
+# 章末类型判定（顺序即优先级）
+END_RECORD = re.compile(r'(合上|写完|记下|记一笔|写下|搁笔|把账册|账册合上|收了笔|盖上)')
+END_MOVE = re.compile(r'(站起来|走过去|走进|走出去|出门|上马|离开|坐下|坐下来|靠着|蹲下|往.{0,8}走|迈)')
+END_LOOK = re.compile(r'(看|望|盯着|盯着看|朝.{0,8}看)')
+END_PROP = re.compile(r'(灯|门|路|石板|雾|纸|账|印|碗|火|字|灰|缝|牌|杖|笔)')
+END_BAN = ('视线', '记录')   # 章末模板收尾：这两类要压到 <=20/119
+END_WEAK = ('空转',)         # 章末空转（短句抽象收尾，无具体物、无对白）
+
 # ---------------------------------------------------------------- 自造人名
 # 台词动词前的人名：XX说 / XX问 / XX答（前面不能再接汉字，避免把"先医后问"当人名）
 NAME_SPEAK_RE = re.compile(
@@ -156,6 +193,63 @@ def cjk(s):
     return len(re.findall(r'[\u4e00-\u9fff]', s))
 
 
+def split_scenes(body):
+    """按独占一行的「——」切镜头。行内 —— 是破折号，不切。"""
+    return [p.strip() for p in SCENE_SEP_RE.split(body) if p.strip()]
+
+
+def scene_stats(body):
+    """返回 (镜头数, 均长, 最短, 最长)。"""
+    lens = [cjk(s) for s in split_scenes(body)]
+    if not lens:
+        return 0, 0, 0, 0
+    return len(lens), sum(lens) // len(lens), min(lens), max(lens)
+
+
+def template_density(body):
+    """返回 (模板句密度/千字, [(短语, 次数)])。"""
+    n = cjk(body) or 1
+    hits = [(w, body.count(w)) for w in TEMPLATE_PHRASES]
+    hits = [(w, c) for w, c in hits if c]
+    return sum(c for _, c in hits) / n * 1000, sorted(hits, key=lambda x: -x[1])
+
+
+def attr_count(body):
+    return sum(body.count(w) for w in ATTR_PHRASES)
+
+
+def body_paras(body):
+    """正文段落，剔除空行与独占一行的「——」分隔符（末尾常残留一行）。"""
+    out = []
+    for p in body.strip().split('\n'):
+        p = p.strip()
+        if not p or SCENE_SEP_RE.match(p):
+            continue
+        out.append(p)
+    return out
+
+
+def end_type(body):
+    """章末类型：对白 / 记录 / 位移 / 视线 / 画面 / 空转 / 其他 / 空。"""
+    paras = body_paras(body)
+    if not paras:
+        return '空'
+    last = paras[-1]
+    if re.search(r'[「“]', last):
+        return '对白'
+    if END_RECORD.search(last):
+        return '记录'
+    if END_MOVE.search(last):
+        return '位移'
+    if END_LOOK.search(last):
+        return '视线'
+    if END_PROP.search(last):
+        return '画面'
+    if len(re.sub(r'\s', '', last)) < 20:
+        return '空转'
+    return '其他'
+
+
 def max_comma(s):
     return max((x.count('，') for x in re.split(r'[。！？；\n]', s)), default=0)
 
@@ -207,7 +301,9 @@ def name_suspects(body):
     return sorted(hits, key=lambda x: -x[1])
 
 
-def check(name, body, verbose=True):
+def check(name, body, verbose=True, struct=True):
+    """struct=False 时不报结构项（镜头/章末/模板密度）——批量体检用，
+    避免 116/119 章都报可疑；结构汇总走 struct_report()。"""
     n = cjk(body)
     problems = []
     suspects = []
@@ -248,12 +344,33 @@ def check(name, body, verbose=True):
         suspects.append('疑似自造人名（查 06/09 登记表）：'
                         + '、'.join('%s×%d' % h for h in nm))
 
-    paras = [p.strip() for p in body.strip().split('\n') if p.strip()]
+    paras = body_paras(body)
     if paras:
         last = paras[-1]
         sw = [w for w in SUMMARIZE if w in last]
         if sw and len(last) > 20:
             suspects.append('章末疑似抒情/总结（末段含 %s）' % '、'.join(sw))
+
+    # ---- 结构指标（合并减字口径）
+    if struct:
+        ns, avg, mn, mx = scene_stats(body)
+        if ns <= 1 and n >= 400:
+            suspects.append('单场章（一拍一章，无「——」分隔；目标 3—5 镜）')
+        elif ns and avg < SCENE_TARGET_MIN:
+            suspects.append('镜头碎片化：%d 镜、均 %d 字、最短 %d（目标 ≥%d 字/镜）'
+                            % (ns, avg, mn, SCENE_TARGET_MIN))
+        elif ns > 5 and n >= CH_MERGE_BAND[0]:
+            suspects.append('镜头过多：%d 镜（目标 3—5；长章里镜头多=该并场）' % ns)
+        td, th = template_density(body)
+        if td > TEMPLATE_DENSITY_ALERT:
+            suspects.append('模板句密度 %.2f/千字（上限 %.1f）：%s'
+                            % (td, TEMPLATE_DENSITY_ALERT,
+                               '、'.join('%s×%d' % h for h in th[:5])))
+        et = end_type(body)
+        if et in END_BAN:
+            suspects.append('章末模板收尾（%s类；脚本口径基线 24/119，目标 ≤20/119）' % et)
+        elif et in END_WEAK:
+            suspects.append('章末空转（短句抽象收尾，无具体物、无对白）')
 
     quotes = body.count('“') + body.count('"') + body.count('「')
 
@@ -298,10 +415,11 @@ def density_report(allch):
     rows = []
     for fn, title, body in allch:
         n = cjk(body) or 1
+        sc, avg, _, _ = scene_stats(body)
         rows.append({
             'no': int(re.match(r'^第0*(\d+)章', fn).group(1)),
             'n': cjk(body),
-            'scenes': body.count('——'),
+            'scenes': sc,
             'dlog': body.count('“') // 2,
             'bw': sum(body.count(w) for w in BIGWORLD) / n * 1000,
             'cu': sum(body.count(w) for w in CULT_WORDS) / n * 1000,
@@ -353,8 +471,120 @@ def density_report(allch):
         print('[OK] 无过短章。')
     thin = [g for g in rows if g['scenes'] < 2]
     if thin:
-        print('单场章（无"——"分隔，共 %d 章）：%s'
+        print('单场章（无「——」分隔，共 %d 章）：%s'
               % (len(thin), '、'.join(str(g['no']) for g in thin)))
+
+
+def struct_report(allch, detail=False):
+    """结构指标：镜头数 / 镜头均长 / 章末类型 / 模板句密度。
+
+    这是「合并减字」的量化验收尺（见 规划/合并减字方案.md）。
+    只报不判：镜头碎片与章末模板是结构信号，改不改由人决定。
+    """
+    rows = []
+    for fn, title, body in allch:
+        ns, avg, mn, mx = scene_stats(body)
+        td, th = template_density(body)
+        rows.append({
+            'no': int(re.match(r'^第0*(\d+)章', fn).group(1)),
+            'title': title,
+            'n': cjk(body),
+            'sc': ns, 'avg': avg, 'min': mn,
+            'end': end_type(body),
+            'td': td, 'th': th,
+            'attr': attr_count(body),
+        })
+    rows.sort(key=lambda r: r['no'])
+    if not rows:
+        return
+
+    def med(xs):
+        ys = sorted(xs)
+        return ys[len(ys) // 2] if ys else 0
+
+    tot_n = sum(r['n'] for r in rows)
+    tot_sc = sum(r['sc'] for r in rows)
+    print('-' * 88)
+    print('结构指标（合并减字口径：3—5 镜/章、每镜 ≥%d 字、章长 %d—%d）'
+          % (SCENE_TARGET_MIN, CH_MERGE_BAND[0], CH_MERGE_BAND[1]))
+    print('%-9s %4s %7s %6s %6s %6s %7s %8s %9s'
+          % ('段', '章数', '总字', '均字', '镜头', '镜均长', '碎片镜%', '模板密度', '章末模板%'))
+    i = 0
+    while i < len(rows):
+        grp = rows[i:i + SEG]
+        i += SEG
+        gn = sum(g['n'] for g in grp) or 1
+        gsc = sum(g['sc'] for g in grp)
+        frag = sum(1 for g in grp if g['sc'] and g['avg'] < SCENE_FRAG)
+        ban = sum(1 for g in grp if g['end'] in END_BAN)
+        print('%-9s %4d %7d %6d %6d %6d %7.0f%% %8.2f %8.0f%%'
+              % ('%d—%d' % (grp[0]['no'], grp[-1]['no']), len(grp), gn,
+                 gn / len(grp), gsc,
+                 sum(g['avg'] * g['sc'] for g in grp) // max(1, gsc),
+                 frag * 100.0 / len(grp),
+                 sum(g['td'] * g['n'] for g in grp) / gn,
+                 ban * 100.0 / len(grp)))
+    print('全体      %4d %7d %6d %6d %6d %7.0f%% %8.2f %8.0f%%'
+          % (len(rows), tot_n, tot_n / len(rows), tot_sc,
+             sum(r['avg'] * r['sc'] for r in rows) // max(1, tot_sc),
+             sum(1 for r in rows if r['sc'] and r['avg'] < SCENE_FRAG) * 100.0 / len(rows),
+             sum(r['td'] * r['n'] for r in rows) / tot_n,
+             sum(1 for r in rows if r['end'] in END_BAN) * 100.0 / len(rows)))
+
+    print('-' * 88)
+    print('结构未达标清单（合并时要处理的对象）')
+    one = [r for r in rows if r['sc'] <= 1 and r['n'] >= 400]
+    frag = [r for r in rows if r['sc'] > 1 and r['avg'] < SCENE_TARGET_MIN]
+    endb = [r for r in rows if r['end'] in END_BAN]
+    endw = [r for r in rows if r['end'] in END_WEAK]
+    dens = [r for r in rows if r['td'] > TEMPLATE_DENSITY_ALERT]
+    short = [r for r in rows if r['n'] < CH_MERGE_BAND[0]]
+    print('  一拍一章（无「——」）        %3d 章：%s'
+          % (len(one), '、'.join(str(r['no']) for r in one)))
+    print('  镜头碎片化（均长<%d）      %3d 章：%s'
+          % (SCENE_TARGET_MIN, len(frag), '、'.join(str(r['no']) for r in frag)))
+    print('  章末模板收尾（%s）      %3d 章：%s'
+          % ('/'.join(END_BAN), len(endb), '、'.join(str(r['no']) for r in endb)))
+    print('  章末空转收尾                %3d 章：%s'
+          % (len(endw), '、'.join(str(r['no']) for r in endw)))
+    print('  └ 弱收尾合计（模板+空转）    %3d 章（目标 ≤%d）'
+          % (len(endb) + len(endw), int(len(rows) * 0.3)))
+    print('  模板密度>%.1f/千字           %3d 章：%s'
+          % (TEMPLATE_DENSITY_ALERT, len(dens), '、'.join(str(r['no']) for r in dens)))
+    print('  章长<%d（合并目标下限）    %3d 章'
+          % (CH_MERGE_BAND[0], len(short)))
+    print('  对话归属词合计 %d 次（「赵升说」类；对话体单一化指标）'
+          % sum(r['attr'] for r in rows))
+
+    # 章末类型序列 + 连续同类型
+    print('-' * 88)
+    seq = [r['end'] for r in rows]
+    print('章末类型分布：'
+          + '、'.join('%s×%d' % (t, c) for t, c in Counter(seq).most_common()))
+    runs = []
+    j = 0
+    while j < len(seq):
+        k = j
+        while k + 1 < len(seq) and seq[k + 1] == seq[j]:
+            k += 1
+        if k - j + 1 >= 3:
+            runs.append('%s×%d（第%d—%d章）'
+                        % (seq[j], k - j + 1, rows[j]['no'], rows[k]['no']))
+        j = k + 1
+    if runs:
+        print('  连续同类型（>=3 连，读起来会撞车）：' + '；'.join(runs))
+    else:
+        print('  [OK] 无 >=3 连的章末同类型。')
+
+    if detail:
+        print('-' * 88)
+        print('逐章明细（合并映射用）')
+        print('%-5s %6s %4s %5s %5s %-4s %6s %5s  %s'
+              % ('章', '字数', '镜头', '均长', '最短', '章末', '模板', '归属', '章名'))
+        for r in rows:
+            print('%-5d %6d %4d %5d %5d %-4s %6.2f %5d  %s'
+                  % (r['no'], r['n'], r['sc'], r['avg'], r['min'],
+                     r['end'], r['td'], r['attr'], r['title']))
 
 
 def main():
@@ -365,9 +595,12 @@ def main():
         return
 
     allch = load_all()
-    want_cross = bool(args and args[0] == '全')
-    want_feel = bool(args and args[0] == '读感')
-    if args and args[0] not in ('全', '读感'):
+    mode = args[0] if args else ''
+    want_cross = mode == '全'
+    want_feel = mode == '读感'
+    want_struct = mode in ('全', '合并', '结构')
+    single = bool(args) and mode not in ('全', '读感', '合并', '结构')
+    if single:
         key = args[0]
         if key.isdigit():
             allch = [c for c in allch if re.match(r'^第0*%d章_' % int(key), c[0])]
@@ -376,24 +609,31 @@ def main():
 
     bad = 0
     sus = 0
-    if not want_feel:
+    only_struct = mode in ('合并', '结构')
+    if not want_feel and not only_struct:
         for fn, title, body in allch:
             problems, suspects = check(
-                '第%s章 %s' % (fn.split('章')[0].replace('第', '').lstrip('0') or '?', title), body)
+                '第%s章 %s' % (fn.split('章')[0].replace('第', '').lstrip('0') or '?', title),
+                body, struct=single)
             if problems:
                 bad += 1
             elif suspects:
                 sus += 1
     total_n = sum(cjk(b) for _, _, b in allch)
-    if not want_feel:
+    if not want_feel and not only_struct:
         print('-' * 60)
         print('体检 %d 章，%d 正文字；有硬伤 %d 章，有可疑 %d 章'
               % (len(allch), total_n, bad, sus))
         print('提示：[硬伤] 必改；[可疑] 只供参考，套话/术语替代命中老章属正常。')
+        if not single:
+            print('      结构项（镜头/章末/模板密度）不在此列表，'
+                  '见 `python 脚本/文风体检.py 结构`。')
     if want_cross:
         cross_chapter_report(allch)
     if want_feel or want_cross:
         density_report(allch)
+    if want_struct:
+        struct_report(allch, detail=(mode == '合并'))
 
 
 if __name__ == '__main__':
