@@ -36,15 +36,21 @@ DevTrace 是唯一的**活状态控制层**。开始任何写作/规划任务先
 
 ## 2. 两个模型的固定分工
 
-### 人物 / 卷纲 / 批次规划的专用入口
+### 规划、写作、验收的专用入口
 
-涉及人物去留、卷纲、批次契约、章节施工单或连续性复审时，使用本机 skill：
+按当前任务使用对应本机 skill：
 
 ```text
-C:\Users\dtc\.codex\skills\baishi-feisheng-planning\SKILL.md
+C:\Users\dtc\.codex\skills\baishi-feisheng-planning\SKILL.md  人物去留、卷纲、批次契约、章节施工单
+C:\Users\dtc\.codex\skills\baishi-feisheng-writing\SKILL.md   按批准工单写正文或局部修订
+C:\Users\dtc\.codex\skills\baishi-feisheng-review\SKILL.md    验收写手交稿、局部修复、DevTrace 通过/退回
 ```
 
-该 skill 规定了规划前的必读资料路由、正文事实优先级、人物跨地图/跨境界承载门槛和 DevTrace 回写要求。人物能否继续同行必须先过“修为、寿元、环境耐受、独立目标、保护成本、退出点”检查；不能只因熟悉主角或承担记账功能而常驻。
+三者职责分开：规划者不代写正文；写手不重规划主线；验收者不调用 `start_work` 领取写作项。共同事实仍以本文件、DevTrace 和四份写作资料为准，不在三个 skill 里复制整套设定。
+
+历史工单里的“条目没写的事实不要补”“条目没给的数字不要写”，统一解释为**不能补会形成连续性债的事实和剧情数字**；不限制在本场闭合的天气、声响、普通器物、无名路人动作、对话走法和自然量词。工单若对某一类细节另有明确禁令，仍以该禁令为准。
+
+人物能否继续同行必须先过“修为、寿元、环境耐受、独立目标、保护成本、退出点”检查；不能只因熟悉主角或承担记账功能而常驻。
 
 ### DeepSeek Flash：剧情规划 / 验收
 
@@ -66,9 +72,9 @@ Qwen 的自由发挥只要不越红线、不改本章目标与落点，一律算
 负责：
 - 读取 DevTrace 最新施工单；
 - 按施工单写当前一章，不擅自重规划主线；
-- 局部文学发挥可以，但新增事实/物件/伏笔/偏离必须回写；
+- 局部文学发挥可以；只有会形成连续性债的新增事实、关键物件、伏笔或偏离需要回写，场内闭合细节不用逐项报备；
 - 正文完成后跑脚本验收；
-- 用 `record_progress(event_type="change")` 写入本章实际结果。
+- 通过 `start_work` 领取的工单用 `submit_work` 交付；直接写作任务用 `record_progress(event_type="change")` 写入实际结果。
 
 Qwen 不再自行综合一堆旧章卡、旧交接卡、旧任务单。
 
@@ -77,8 +83,9 @@ Qwen 不再自行综合一堆旧章卡、旧交接卡、旧任务单。
 ```text
 Flash 规划下一章（note）
 → Qwen 写正文（change）
-→ 正文管理.py + 文风体检.py
+→ 候选稿体检.py + 文风体检.py
 → Flash 验收（test）
+→ 晋升 `分章/` 后才运行 正文管理.py 全本/检查
 → 更新 current_conclusion / current_risk / next_step
 → 下一章
 ```
